@@ -20,7 +20,7 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Setup Android SDK
+    - name: Setup Android SDK with latest cmdline-tools
       run: |
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
         unzip -q commandlinetools-linux-11076708_latest.zip
@@ -35,16 +35,7 @@ jobs:
     - name: Install Android components
       run: |
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-          "platform-tools" \
-          "platforms;android-34" \
-          "build-tools;34.0.0" \
-          "ndk;25.1.8937393"
-
-    - name: Set NDK environment
-      run: |
-        echo "NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-30" "platforms;android-34" "build-tools;30.0.3" "build-tools:34.0.0"
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -54,36 +45,170 @@ jobs:
     - name: Install cargo-apk
       run: cargo install cargo-apk
 
-    - name: Cache Cargo dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Build APK
+    - name: Auto-detect project structure and build
       run: |
-        cargo apk build --release --target aarch64-linux-android 2>&1 | tee build.log
-        echo "BUILD_STATUS=$?" >> $GITHUB_ENV
+        echo "🔍 === 项目结构自动检测 ==="
+        
+        # 1. 查找所有 Cargo.toml 文件
+        CARGO_FILES=$(find . -name "Cargo.toml" -type f)
+        echo "发现的 Cargo.toml 文件："
+        echo "$CARGO_FILES"
+        
+        if [ -z "$CARGO_FILES" ]; then
+          echo "❌ 错误：未找到任何 Cargo.toml 文件"
+          echo "📁 当前目录结构："
+          find . -maxdepth 3 -type f -name "*.toml" -o -name "*.rs" | head -20
+          exit 1
+        fi
+        
+        # 2. 确定主项目目录（选择包含最多 .rs 文件的 Cargo.toml）
+        MAIN_PROJECT_DIR=""
+        MAX_RS_COUNT=0
+        
+        for cargo_file in $CARGO_FILES; do
+          PROJECT_DIR=$(dirname "$cargo_file")
+          RS_COUNT=$(find "$PROJECT_DIR" -name "*.rs" -type f | wc -l)
+          echo "📊 $PROJECT_DIR: $RS_COUNT 个 .rs 文件"
+          
+          if [ $RS_COUNT -gt $MAX_RS_COUNT ]; then
+            MAX_RS_COUNT=$RS_COUNT
+            MAIN_PROJECT_DIR="$PROJECT_DIR"
+          fi
+        done
+        
+        echo ""
+        echo "✅ 检测到主项目目录：$MAIN_PROJECT_DIR"
+        echo "📝 包含 $MAX_RS_COUNT 个 Rust 源文件"
+        
+        # 3. 进入项目目录并验证
+        cd "$MAIN_PROJECT_DIR"
+        
+        if [ ! -f "Cargo.toml" ]; then
+          echo "❌ 错误：无法在 $MAIN_PROJECT_DIR 找到 Cargo.toml"
+          exit 1
+        fi
+        
+        echo ""
+        echo "📋 项目信息："
+        echo "目录：$(pwd)"
+        echo "Cargo.toml 内容预览："
+        head -10 Cargo.toml
+        
+        # 4. 检查是否为 Android 项目
+        if ! grep -q "crate-type.*cdylib" Cargo.toml; then
+          echo "⚠️  警告：未发现 cdylib 配置，可能不是 Android 项目"
+        fi
+        
+        echo ""
+        echo "🚀 === 开始构建 ==="
+        
+        # 5. 构建
+        BUILD_OUTPUT_DIR="../build_output"
+        mkdir -p "$BUILD_OUTPUT_DIR"
+        
+        if cargo apk build --release --target aarch64-linux-android 2>&1 | tee "$BUILD_OUTPUT_DIR/build.log"; then
+          echo "BUILD_STATUS=0" >> $GITHUB_ENV
+          echo "✅ 构建成功"
+        else
+          echo "BUILD_STATUS=1" >> $GITHUB_ENV
+          echo "❌ 构建失败"
+        fi
+        
+        # 6. 保存项目路径供后续步骤使用
+        echo "PROJECT_DIR=$(pwd)" >> $GITHUB_ENV
+        echo "BUILD_OUTPUT_DIR=$BUILD_OUTPUT_DIR" >> $GITHUB_ENV
 
-    - name: Find APK
-      if: success()
+    - name: Extract and display errors
+      if: always() && env.BUILD_STATUS == '1'
       run: |
-        APK_PATH=$(find target -name "*.apk" -type f | head -1)
-        echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+        echo "🔍 === 构建错误分析 ==="
+        
+        if [ -f "${{ env.BUILD_OUTPUT_DIR }}/build.log" ]; then
+          echo "❌ Rust 编译错误："
+          grep -E "^error\[|^   --> [0-9]+:[0-9]+|help:|note:" "${{ env.BUILD_OUTPUT_DIR }}/build.log" | head -20 || echo "无具体编译错误"
+          
+          echo ""
+          echo "🔧 错误代码："
+          grep -oE "E[0-9]{4}" "${{ env.BUILD_OUTPUT_DIR }}/build.log" | sort -u | tr '\n' ' ' || echo "无错误代码"
+          
+          echo ""
+          echo "📄 构建日志最后 20 行："
+          tail -20 "${{ env.BUILD_OUTPUT_DIR }}/build.log"
+        fi
 
-    - name: Upload APK
-      if: success() && env.APK_PATH != ''
+    - name: Intelligent APK discovery
+      if: always()
+      run: |
+        echo "🔍 === 智能 APK 搜索 ==="
+        
+        # 定义所有可能的搜索路径模式
+        SEARCH_PATTERNS=(
+          "${{ env.PROJECT_DIR }}/target/aarch64-linux-android/release/*.apk"
+          "${{ env.PROJECT_DIR }}/target/aarch64-linux-android/debug/*.apk"
+          "${{ env.PROJECT_DIR }}/target/*/release/*.apk"
+          "${{ env.PROJECT_DIR }}/target/*/debug/*.apk"
+          "./target/aarch64-linux-android/release/*.apk"
+          "./target/aarch64-linux-android/debug/*.apk"
+          "./*/*.apk"
+          "./*.apk"
+        )
+        
+        FOUND_APKS=""
+        
+        for pattern in "${SEARCH_PATTERNS[@]}"; do
+          echo "🔍 搜索模式：$pattern"
+          FOUND=$(find . -name "*.apk" -type f 2>/dev/null | grep -E "$(echo "$pattern" | sed 's/\*/.*/g')" || true)
+          
+          if [ -n "$FOUND" ]; then
+            echo "✅ 找到 APK："
+            echo "$FOUND"
+            FOUND_APKS="$FOUND_APKS$FOUND\n"
+          fi
+        done
+        
+        if [ -n "$FOUND_APKS" ]; then
+          FIRST_APK=$(echo -e "$FOUND_APKS" | head -1 | tr -d '\n')
+          echo "APK_PATH=$FIRST_APK" >> $GITHUB_ENV
+          echo "📦 选择 APK：$FIRST_APK"
+        else
+          echo "❌ 未找到任何 APK 文件"
+          echo ""
+          echo "📁 完整目录结构分析："
+          find . -type d -name "target" -exec find {} -type f \; 2>/dev/null | head -30 || echo "无 target 目录"
+          echo ""
+          echo "🔍 所有构建产物："
+          find . -name "*.apk" -o -name "*.so" -o -name "*.a" 2>/dev/null | head -20 || echo "无构建产物"
+          echo "APK_PATH=" >> $GITHUB_ENV
+        fi
+
+    - name: Upload APK artifact
+      if: success() && env.BUILD_STATUS == '0' && env.APK_PATH != ''
       uses: actions/upload-artifact@v4
       with:
         name: userdata-rust-apk
         path: ${{ env.APK_PATH }}
+        retention-days: 30
 
-    - name: Upload build log
-      if: failure()
+    - name: Upload comprehensive build log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-log
-        path: build.log
+        name: build-debug-info
+        path: ${{ env.BUILD_OUTPUT_DIR }}
+        retention-days: 7
+
+    - name: Final comprehensive status
+      if: always()
+      run: |
+        echo "=== 构建总结 ==="
+        echo "构建状态：${{ env.BUILD_STATUS }}"
+        echo "项目目录：${{ env.PROJECT_DIR }}"
+        echo "APK 路径：${{ env.APK_PATH }}"
+        
+        if [ "${{ env.BUILD_STATUS }}" == "0" ] && [ -n "${{ env.APK_PATH }}" ]; then
+          echo "🎉 构建完全成功！APK 已上传。"
+        elif [ "${{ env.BUILD_STATUS }}" == "0" ]; then
+          echo "⚠️  构建成功但未找到 APK。检查项目配置。"
+        else
+          echo "❌ 构建失败。查看详细日志进行诊断。"
+        fi
