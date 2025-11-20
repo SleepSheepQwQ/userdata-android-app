@@ -48,103 +48,175 @@ jobs:
     - name: Install cargo-apk
       run: cargo install cargo-apk
       
-    - name: Detect project structure
+    - name: Auto-detect project directory
       run: |
-        echo "PROJECT_ROOT=$(pwd)" >> $GITHUB_ENV
-        if [ -d "userdata_rust" ]; then
-          echo "PROJECT_DIR=userdata_rust" >> $GITHUB_ENV
+        echo "=== Auto-detecting project structure ==="
+        ROOT_DIR=$(pwd)
+        echo "ROOT_DIR=$ROOT_DIR" >> $GITHUB_ENV
+        
+        # 查找所有包含 Cargo.toml 的目录
+        CARGO_DIRS=$(find . -name "Cargo.toml" -exec dirname {} \;)
+        echo "Found Cargo.toml in: $CARGO_DIRS"
+        
+        # 选择第一个找到的目录作为项目目录
+        if [ -n "$CARGO_DIRS" ]; then
+          PROJECT_DIR=$(echo "$CARGO_DIRS" | head -1 | sed 's/^\.\///')
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Selected project directory: $PROJECT_DIR"
         else
+          echo "ERROR: No Cargo.toml found"
           echo "PROJECT_DIR=." >> $GITHUB_ENV
+          exit 1
         fi
         
-    - name: Check project files
+    - name: Verify project structure
       run: |
         cd ${{ env.PROJECT_DIR }}
         echo "Current directory: $(pwd)"
         echo "Files in directory:"
         ls -la
         if [ -f "Cargo.toml" ]; then
-          echo "Cargo.toml found"
-          head -20 Cargo.toml
+          echo "SUCCESS: Cargo.toml found"
+          echo "Cargo.toml content preview:"
+          head -10 Cargo.toml
         else
-          echo "ERROR: Cargo.toml not found"
+          echo "ERROR: Cargo.toml not found in $(pwd)"
           exit 1
         fi
         
-    - name: Fix Cargo.toml if needed
+    - name: Fix Cargo configuration
       run: |
         cd ${{ env.PROJECT_DIR }}
+        
+        # 备份原文件
+        cp Cargo.toml Cargo.toml.backup
+        
+        # 检查并添加 [lib] 和 cdylib
         if ! grep -q "crate-type.*cdylib" Cargo.toml; then
-          echo "Adding cdylib configuration"
-          echo "" >> Cargo.toml
-          echo "[lib]" >> Cargo.toml
-          echo "crate-type = [\"cdylib\"]" >> Cargo.toml
+          echo "Adding cdylib configuration..."
+          if grep -q "\[lib\]" Cargo.toml; then
+            sed -i '/\[lib\]/a crate-type = ["cdylib"]' Cargo.toml
+          else
+            echo "" >> Cargo.toml
+            echo "[lib]" >> Cargo.toml
+            echo 'crate-type = ["cdylib"]' >> Cargo.toml
+          fi
         fi
+        
+        # 检查并添加 Android 配置
         if ! grep -q "package.metadata.android" Cargo.toml; then
           echo "" >> Cargo.toml
           echo "[package.metadata.android]" >> Cargo.toml
-          echo "package = \"com.example.userdata_rust\"" >> Cargo.toml
+          echo 'package = "com.example.userdata_rust"' >> Cargo.toml
           echo "target_sdk_version = 34" >> Cargo.toml
           echo "min_sdk_version = 21" >> Cargo.toml
         fi
         
-    - name: Build project
+        echo "Updated Cargo.toml:"
+        cat Cargo.toml
+        
+    - name: Build APK
       run: |
         cd ${{ env.PROJECT_DIR }}
+        echo "Building in directory: $(pwd)"
+        
+        # 清理之前的构建
+        cargo clean
+        
+        # 构建
         cargo apk build --release --target aarch64-linux-android > build.log 2>&1
-        echo "BUILD_STATUS=$?" >> $GITHUB_ENV
+        BUILD_RESULT=$?
+        echo "BUILD_RESULT=$BUILD_RESULT" >> $GITHUB_ENV
         
-    - name: Check build results
+        # 显示构建结果
+        echo "Build completed with status: $BUILD_RESULT"
+        echo "Last 30 lines of build log:"
+        tail -30 build.log
+        
+    - name: Check build artifacts
       run: |
         cd ${{ env.PROJECT_DIR }}
-        echo "Build status: ${{ env.BUILD_STATUS }}"
-        echo "Build log last 20 lines:"
-        tail -20 build.log || echo "No build log found"
-        echo ""
-        echo "Looking for .so files:"
-        find target -name "*.so" 2>/dev/null || echo "No .so files found"
-        echo ""
-        echo "Looking for APK files:"
-        find target -name "*.apk" 2>/dev/null || echo "No APK files found"
+        echo "=== Checking build artifacts ==="
         
-    - name: Find APK
+        # 查找动态库
+        echo "Looking for .so files:"
+        find target -name "*.so" -exec ls -la {} \; 2>/dev/null || echo "No .so files found"
+        
+        # 查找APK
+        echo "Looking for APK files:"
+        find target -name "*.apk" -exec ls -la {} \; 2>/dev/null || echo "No APK files found"
+        
+        # 检查target目录结构
+        echo "Target directory structure:"
+        find target -type d | head -10 2>/dev/null || echo "No target directory structure"
+        
+    - name: Find and prepare APK
       run: |
-        cd ${{ env.PROJECT_ROOT }}
+        cd ${{ env.ROOT_DIR }}
+        echo "=== Finding APK ==="
+        
+        # 从根目录搜索所有APK
         APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        
         if [ -n "$APK_PATH" ]; then
           echo "Found APK: $APK_PATH"
-          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
           echo "APK size: $(ls -lh $APK_PATH | awk '{print $5}')"
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          
+          # 检查APK内容
+          APK_DIR=$(dirname "$APK_PATH")
+          APK_NAME=$(basename "$APK_PATH" .apk)
+          EXTRACTED_DIR="$APK_DIR/${APK_NAME}_extracted"
+          
+          mkdir -p "$EXTRACTED_DIR"
+          unzip -q "$APK_PATH" -d "$EXTRACTED_DIR"
+          
+          echo "APK contents:"
+          find "$EXTRACTED_DIR" -type f | head -20
+          
+          # 检查是否有lib目录
+          if [ -d "$EXTRACTED_DIR/lib" ]; then
+            echo "Found lib directory with:"
+            find "$EXTRACTED_DIR/lib" -name "*.so" | head -10
+          else
+            echo "WARNING: No lib directory found in APK"
+          fi
         else
-          echo "No APK found"
+          echo "ERROR: No APK found"
           echo "APK_PATH=" >> $GITHUB_ENV
         fi
         
-    - name: Upload APK if found
-      if: env.BUILD_STATUS == '0' && env.APK_PATH != ''
+    - name: Upload APK
+      if: env.BUILD_RESULT == '0' && env.APK_PATH != ''
       uses: actions/upload-artifact@v4
       with:
         name: android-apk
         path: ${{ env.APK_PATH }}
         retention-days: 30
         
-    - name: Upload debug logs
+    - name: Upload debug information
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: debug-logs
-        path: ${{ env.PROJECT_DIR }}/build.log
+        name: build-debug
+        path: |
+          ${{ env.PROJECT_DIR }}/build.log
+          ${{ env.PROJECT_DIR }}/Cargo.toml
+          ${{ env.PROJECT_DIR }}/Cargo.toml.backup
         retention-days: 7
         continue-on-error: true
         
-    - name: Final status
+    - name: Final report
       if: always()
       run: |
         echo "=== Build Summary ==="
-        echo "Status: ${{ env.BUILD_STATUS }}"
-        echo "APK: ${{ env.APK_PATH }}"
-        if [ "${{ env.BUILD_STATUS }}" == "0" ] && [ -n "${{ env.APK_PATH }}" ]; then
-          echo "SUCCESS: APK generated and uploaded"
+        echo "Project directory: ${{ env.PROJECT_DIR }}"
+        echo "Build result: ${{ env.BUILD_RESULT }}"
+        echo "APK path: ${{ env.APK_PATH }}"
+        
+        if [ "${{ env.BUILD_RESULT }}" == "0" ] && [ -n "${{ env.APK_PATH }}" ]; then
+          echo "SUCCESS: APK built and uploaded"
         else
-          echo "FAILED: Check debug logs for details"
+          echo "FAILED: Build failed or APK not found"
+          echo "Check debug artifacts for details"
         fi
