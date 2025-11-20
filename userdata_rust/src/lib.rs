@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::collections::HashMap;
-use std::io::Read;
 use once_cell::sync::Lazy;
 use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
 use crossbeam_channel::{self, Sender, Receiver};
@@ -162,6 +161,7 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
     }
 }
 
+// 修复1: 使用Arc<Mutex<Connection>>解决线程安全问题
 fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     if !std::path::Path::new(&config.db_path).exists() {
         error!("Database file not found: {}", config.db_path);
@@ -169,7 +169,7 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     }
 
     let conn = match Connection::open(&config.db_path) {
-        Ok(c) => Arc::new(c),
+        Ok(c) => Arc::new(Mutex::new(c)),
         Err(e) => {
             error!("Failed to open database: {}", e);
             return;
@@ -213,7 +213,8 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     info!("Server loop ended.");
 }
 
-fn handle_request(mut request: Request, conn: Arc<Connection>) {
+// 修复2: 修改参数类型为Arc<Mutex<Connection>>
+fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
     match request.method() {
         Method::Get => {
             match request.url() {
@@ -239,11 +240,11 @@ fn handle_request(mut request: Request, conn: Arc<Connection>) {
             match request.url() {
                 "/query" => {
                     let mut content = String::new();
-                    // 修复: 确保Read trait在作用域内
-                    use std::io::Read;
+                    // 修复3: 直接使用request的reader
                     let _ = request.as_reader().read_to_string(&mut content);
                     
                     let form_data = parse_form_data(&content);
+                    // 修复4: 传递锁保护的连接
                     let result = query_database(&conn, &form_data);
                     let json = serde_json::to_string(&result).unwrap_or_default();
                     
@@ -252,6 +253,7 @@ fn handle_request(mut request: Request, conn: Arc<Connection>) {
                     let _ = request.respond(response);
                 }
                 "/stats" => {
+                    // 修复5: 传递锁保护的连接
                     let stats = get_database_stats(&conn);
                     let response = Response::from_string(stats)
                         .with_header("Content-Type: text/html".parse::<tiny_http::Header>().unwrap());
@@ -282,7 +284,8 @@ fn parse_form_data(content: &str) -> HashMap<String, String> {
     form_data
 }
 
-fn query_database(conn: &Connection, form_data: &HashMap<String, String>) -> Vec<UserInfo> {
+// 修复6: 修改参数类型为Arc<Mutex<Connection>>
+fn query_database(conn: &Arc<Mutex<Connection>>, form_data: &HashMap<String, String>) -> Vec<UserInfo> {
     let mut results = Vec::new();
     
     let (sql, param) = if let Some(phone) = form_data.get("phone") {
@@ -295,17 +298,20 @@ fn query_database(conn: &Connection, form_data: &HashMap<String, String>) -> Vec
         return results;
     };
 
-    if let Ok(mut stmt) = conn.prepare(sql) {
-        if let Ok(rows) = stmt.query_map([&param], |row| {
-            Ok(UserInfo {
-                email: row.get(0).ok(),
-                phone: row.get(1).ok(),
-                qq: row.get(2).ok(),
-            })
-        }) {
-            for row in rows {
-                if let Ok(user) = row {
-                    results.push(user);
+    // 修复7: 使用锁保护数据库访问
+    if let Ok(conn_guard) = conn.lock() {
+        if let Ok(mut stmt) = conn_guard.prepare(sql) {
+            if let Ok(rows) = stmt.query_map([&param], |row| {
+                Ok(UserInfo {
+                    email: row.get(0).ok(),
+                    phone: row.get(1).ok(),
+                    qq: row.get(2).ok(),
+                })
+            }) {
+                for row in rows {
+                    if let Ok(user) = row {
+                        results.push(user);
+                    }
                 }
             }
         }
@@ -314,19 +320,25 @@ fn query_database(conn: &Connection, form_data: &HashMap<String, String>) -> Vec
     results
 }
 
-fn get_database_stats(conn: &Connection) -> String {
-    let total_users = conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
-    let unique_phones = conn.query_row("SELECT COUNT(DISTINCT phone) FROM users WHERE phone IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
-    let unique_qqs = conn.query_row("SELECT COUNT(DISTINCT qq) FROM users WHERE qq IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
-    let unique_emails = conn.query_row("SELECT COUNT(DISTINCT email) FROM users WHERE email IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+// 修复8: 修改参数类型为Arc<Mutex<Connection>>
+fn get_database_stats(conn: &Arc<Mutex<Connection>>) -> String {
+    // 修复9: 使用锁保护数据库访问
+    if let Ok(conn_guard) = conn.lock() {
+        let total_users = conn_guard.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+        let unique_phones = conn_guard.query_row("SELECT COUNT(DISTINCT phone) FROM users WHERE phone IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+        let unique_qqs = conn_guard.query_row("SELECT COUNT(DISTINCT qq) FROM users WHERE qq IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+        let unique_emails = conn_guard.query_row("SELECT COUNT(DISTINCT email) FROM users WHERE email IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
 
-    format!(r#"
-    <h2>Database Statistics</h2>
-    <ul>
-        <li>Total Records: {}</li>
-        <li>Unique Phones: {}</li>
-        <li>Unique QQs: {}</li>
-        <li>Unique Emails: {}</li>
-    </ul>
-    "#, total_users, unique_phones, unique_qqs, unique_emails)
+        format!(r#"
+        <h2>Database Statistics</h2>
+        <ul>
+            <li>Total Records: {}</li>
+            <li>Unique Phones: {}</li>
+            <li>Unique QQs: {}</li>
+            <li>Unique Emails: {}</li>
+        </ul>
+        "#, total_users, unique_phones, unique_qqs, unique_emails)
+    } else {
+        "Database Error: Could not acquire lock".to_string()
+    }
 }
