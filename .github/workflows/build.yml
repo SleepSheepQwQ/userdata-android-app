@@ -23,6 +23,11 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
+    - name: Install Android Platform
+      run: |
+        echo "y" | $ANDROID_HOME/tools/bin/sdkmanager --install "platforms;android-30"
+        echo "y" | $ANDROID_HOME/tools/bin/sdkmanager --install "build-tools;30.0.3"
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
