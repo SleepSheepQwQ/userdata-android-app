@@ -46,12 +46,47 @@ jobs:
     - name: Install cargo-apk
       run: cargo install cargo-apk
 
-    - name: Build APK
+    - name: Build APK with error capture
       run: |
         cd userdata_rust
-        cargo apk build --release --target aarch64-linux-android
+        cargo apk build --release --target aarch64-linux-android 2>&1 | tee build.log
+        echo "BUILD_STATUS=$?" >> $GITHUB_ENV
+
+    - name: Extract and display errors
+      if: always() && env.BUILD_STATUS != '0'
+      run: |
+        cd userdata_rust
+        echo "🔍 === COMPILATION ERRORS SUMMARY ==="
+        echo ""
+        
+        # 显示具体的编译错误
+        echo "❌ Rust Compilation Errors:"
+        grep -E "^error\[|^   --> [0-9]+:[0-9]+|help:|note:" build.log | head -20 || echo "No specific compilation errors found"
+        
+        echo ""
+        echo "🔧 Error Codes Found:"
+        grep -oE "E[0-9]{4}" build.log | sort -u | tr '\n' ' ' || echo "No error codes found"
+        
+        echo ""
+        echo "📄 Last 10 lines of output:"
+        tail -10 build.log
+        
+        echo ""
+        echo "💡 Quick Fix Suggestions:"
+        echo "- Check for missing imports or type mismatches"
+        echo "- Verify all dependencies are compatible"
+        echo "- Look for outdated syntax or deprecated APIs"
+
+    - name: Upload build log for debugging
+      if: always() && env.BUILD_STATUS != '0'
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-error-log
+        path: userdata_rust/build.log
+        retention-days: 7
 
     - name: Upload APK artifact
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: userdata-rust-apk
