@@ -54,9 +54,13 @@ jobs:
         ROOT_DIR=$(pwd)
         echo "ROOT_DIR=$ROOT_DIR" >> $GITHUB_ENV
         
+        # 显示当前目录结构
+        echo "Current directory structure:"
+        find . -maxdepth 2 -type d | sort
+        
         # 查找所有包含 Cargo.toml 的目录
         CARGO_DIRS=$(find . -name "Cargo.toml" -exec dirname {} \;)
-        echo "Found Cargo.toml in: $CARGO_DIRS"
+        echo "Found Cargo.toml in directories: $CARGO_DIRS"
         
         # 选择第一个找到的目录作为项目目录
         if [ -n "$CARGO_DIRS" ]; then
@@ -64,17 +68,29 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
           echo "Selected project directory: $PROJECT_DIR"
         else
-          echo "ERROR: No Cargo.toml found"
+          echo "ERROR: No Cargo.toml found anywhere"
           echo "PROJECT_DIR=." >> $GITHUB_ENV
           exit 1
         fi
         
     - name: Verify project structure
       run: |
-        cd ${{ env.PROJECT_DIR }}
-        echo "Current directory: $(pwd)"
+        echo "=== Verifying project structure ==="
+        echo "ROOT_DIR: ${{ env.ROOT_DIR }}"
+        echo "PROJECT_DIR: ${{ env.PROJECT_DIR }}"
+        
+        # 验证项目目录存在
+        if [ ! -d "${{ env.PROJECT_DIR }}" ]; then
+          echo "ERROR: Project directory ${{ env.PROJECT_DIR }} does not exist"
+          exit 1
+        fi
+        
+        # 进入项目目录并验证
+        cd "${{ env.PROJECT_DIR }}"
+        echo "Current directory after cd: $(pwd)"
         echo "Files in directory:"
         ls -la
+        
         if [ -f "Cargo.toml" ]; then
           echo "SUCCESS: Cargo.toml found"
           echo "Cargo.toml content preview:"
@@ -86,7 +102,9 @@ jobs:
         
     - name: Fix Cargo configuration
       run: |
-        cd ${{ env.PROJECT_DIR }}
+        cd "${{ env.PROJECT_DIR }}"
+        echo "=== Fixing Cargo configuration ==="
+        echo "Working in: $(pwd)"
         
         # 备份原文件
         cp Cargo.toml Cargo.toml.backup
@@ -117,26 +135,29 @@ jobs:
         
     - name: Build APK
       run: |
-        cd ${{ env.PROJECT_DIR }}
-        echo "Building in directory: $(pwd)"
+        cd "${{ env.PROJECT_DIR }}"
+        echo "=== Building APK ==="
+        echo "Working in: $(pwd)"
         
         # 清理之前的构建
         cargo clean
         
         # 构建
+        echo "Starting cargo apk build..."
         cargo apk build --release --target aarch64-linux-android > build.log 2>&1
         BUILD_RESULT=$?
         echo "BUILD_RESULT=$BUILD_RESULT" >> $GITHUB_ENV
         
         # 显示构建结果
         echo "Build completed with status: $BUILD_RESULT"
-        echo "Last 30 lines of build log:"
-        tail -30 build.log
+        echo "Last 50 lines of build log:"
+        tail -50 build.log
         
     - name: Check build artifacts
       run: |
-        cd ${{ env.PROJECT_DIR }}
+        cd "${{ env.PROJECT_DIR }}"
         echo "=== Checking build artifacts ==="
+        echo "Working in: $(pwd)"
         
         # 查找动态库
         echo "Looking for .so files:"
@@ -152,8 +173,9 @@ jobs:
         
     - name: Find and prepare APK
       run: |
-        cd ${{ env.ROOT_DIR }}
+        cd "${{ env.ROOT_DIR }}"
         echo "=== Finding APK ==="
+        echo "Working in: $(pwd)"
         
         # 从根目录搜索所有APK
         APK_PATH=$(find . -name "*.apk" -type f | head -1)
@@ -204,12 +226,12 @@ jobs:
           ${{ env.PROJECT_DIR }}/Cargo.toml
           ${{ env.PROJECT_DIR }}/Cargo.toml.backup
         retention-days: 7
-        continue-on-error: true
         
     - name: Final report
       if: always()
       run: |
         echo "=== Build Summary ==="
+        echo "Root directory: ${{ env.ROOT_DIR }}"
         echo "Project directory: ${{ env.PROJECT_DIR }}"
         echo "Build result: ${{ env.BUILD_RESULT }}"
         echo "APK path: ${{ env.APK_PATH }}"
