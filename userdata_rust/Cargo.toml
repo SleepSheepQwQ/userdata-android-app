@@ -1,0 +1,44 @@
+[package]
+name = "userdata_rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# 使用tiny_http替代axum，更适合JNI环境
+tiny_http = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.29", features = ["bundled"] }
+android_logger = "0.13"
+log = "0.4"
+jni = "0.21"
+once_cell = "1.19"
+# 用于跨线程通信
+crossbeam-channel = "0.5"
+
+[package.metadata.android]
+package_name = "com.example.userdata_rust"
+target_sdk_version = 34
+min_sdk_version = 21
+build_targets = ["aarch64-linux-android"]
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE"
+
+[package.metadata.android.application]
+label = "用户数据服务器"
+icon = "@mipmap/ic_launcher"
+
+[[package.metadata.android.application.activity]]
+name = ".MainActivity"
+exported = true
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]

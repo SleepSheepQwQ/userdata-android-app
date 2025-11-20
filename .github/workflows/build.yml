@@ -1,0 +1,41 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-linux-android
+
+    - name: Install cargo-apk
+      run: cargo install cargo-apk
+
+    - name: Add NDK env
+      run: |
+        wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+        unzip -q android-ndk-r25c-linux.zip
+        echo "ANDROID_NDK_ROOT=$PWD/android-ndk-r25c" >> $GITHUB_ENV
+
+    - name: Build APK
+      run: |
+        cd userdata_rust
+        cargo apk build --release --target aarch64-linux-android
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: userdata-rust-apk
+        path: userdata_rust/target/aarch64-linux-android/release/apk/userdata_rust.apk
+        retention-days: 30
