@@ -3,8 +3,6 @@ name: Build Android APK
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   build:
@@ -13,45 +11,7 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        
-    - name: Deep repository analysis
-      run: |
-        echo "=== 深度仓库结构分析 ==="
-        echo "当前工作目录: $(pwd)"
-        echo "Git仓库根目录: $(git rev-parse --show-toplevel)"
-        echo ""
-        
-        echo "=== 完整目录树 ==="
-        find . -type f -name "*.toml" -o -name "*.rs" -o -name "*.xml" -o -name "*.gradle" | head -50
-        echo ""
-        
-        echo "=== 所有Cargo.toml位置 ==="
-        find . -name "Cargo.toml" -exec echo "文件: {}" \;
-        echo ""
-        
-        echo "=== 目录结构深度分析 ==="
-        find . -type d | sort | head -30
-        echo ""
-        
-        echo "=== 检查是否有Android项目结构 ==="
-        find . -name "AndroidManifest.xml" -o -name "build.gradle" -o -name "gradlew" | head -10
-        echo ""
-        
-        echo "=== 检查是否有userdata_rust目录 ==="
-        if [ -d "userdata_rust" ]; then
-          echo "userdata_rust目录存在，内容："
-          ls -la userdata_rust/
-          echo ""
-          if [ -f "userdata_rust/Cargo.toml" ]; then
-            echo "userdata_rust/Cargo.toml内容："
-            cat userdata_rust/Cargo.toml
-          fi
-        else
-          echo "userdata_rust目录不存在"
-        fi
-        
+      
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -60,216 +20,50 @@ jobs:
         
     - name: Setup Android SDK
       run: |
-        echo "=== Android SDK设置 ==="
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
         unzip -q commandlinetools-linux-11076708_latest.zip
         mkdir -p $HOME/android-sdk/cmdline-tools/latest
         mv cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/
-        
         echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
         echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
         echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
         
     - name: Install Android components
       run: |
-        echo "=== 安装Android组件 ==="
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools"
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34"
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0"
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;25.1.8937393"
         
-        echo "NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-linux-android
         
-    - name: Setup NDK environment
+    - name: Setup Rust for Android
       run: |
-        echo "=== NDK环境配置 ==="
+        cd userdata_rust
         NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
         TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        
-        echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
-        echo "TOOLCHAIN_PATH=$TOOLCHAIN_PATH" >> $GITHUB_ENV
-        echo "$TOOLCHAIN_PATH" >> $GITHUB_PATH
         
         echo "CC_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> $GITHUB_ENV
         echo "CXX_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang++" >> $GITHUB_ENV
         echo "AR_aarch64_linux_android=$TOOLCHAIN_PATH/llvm-ar" >> $GITHUB_ENV
         
-        echo "检查编译器存在性:"
-        ls -la $TOOLCHAIN_PATH/aarch64-linux-android21-clang*
-        
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
-        
-    - name: Install cargo-apk
+    - name: Build Rust library
       run: |
-        echo "=== 安装构建工具 ==="
-        cargo install cargo-apk
+        cd userdata_rust
+        cargo build --release --target aarch64-linux-android
         
-    - name: Multiple project detection
+    - name: Build Android APK with Gradle
       run: |
-        echo "=== 多种项目检测策略 ==="
+        cd userdata_rust
+        ./gradlew assembleRelease
         
-        CARGO_PROJECTS=$(find . -name "Cargo.toml" -exec dirname {} \;)
-        echo "找到的项目: $CARGO_PROJECTS"
-        
-        MAIN_PROJECT=""
-        MAX_RS_FILES=0
-        
-        for project in $CARGO_PROJECTS; do
-          RS_COUNT=$(find "$project" -name "*.rs" -type f 2>/dev/null | wc -l)
-          echo "项目 $project 有 $RS_COUNT 个Rust文件"
-          
-          if [ $RS_COUNT -gt $MAX_RS_FILES ]; then
-            MAX_RS_FILES=$RS_COUNT
-            MAIN_PROJECT="$project"
-          fi
-        done
-        
-        if [ -n "$MAIN_PROJECT" ]; then
-          echo "选择主项目: $MAIN_PROJECT"
-          echo "MAIN_PROJECT=$MAIN_PROJECT" >> $GITHUB_ENV
-        else
-          echo "使用备选方案: userdata_rust"
-          if [ -d "userdata_rust" ] && [ -f "userdata_rust/Cargo.toml" ]; then
-            echo "MAIN_PROJECT=userdata_rust" >> $GITHUB_ENV
-          else
-            echo "MAIN_PROJECT=." >> $GITHUB_ENV
-          fi
-        fi
-        
-    - name: Validate project structure
-      run: |
-        echo "=== 验证项目结构 ==="
-        echo "选择的项目: ${{ env.MAIN_PROJECT }}"
-        
-        cd ${{ env.MAIN_PROJECT }}
-        echo "当前目录: $(pwd)"
-        echo "目录内容:"
-        ls -la
-        
-        if [ -f "Cargo.toml" ]; then
-          echo "Cargo.toml存在，内容:"
-          cat Cargo.toml
-        else
-          echo "ERROR: Cargo.toml不存在"
-          exit 1
-        fi
-        
-    - name: Test environment
-      run: |
-        echo "=== 测试环境配置 ==="
-        echo "NDK_HOME: $NDK_HOME"
-        echo "TOOLCHAIN_PATH: $TOOLCHAIN_PATH"
-        echo "CC_aarch64_linux_android: $CC_aarch64_linux_android"
-        
-        if [ -f "$CC_aarch64_linux_android" ]; then
-          echo "编译器存在: $CC_aarch64_linux_android"
-          $CC_aarch64_linux_android --version
-        else
-          echo "编译器不存在: $CC_aarch64_linux_android"
-        fi
-        
-    - name: Strategy 1: Check dependencies
-      run: |
-        echo "=== 策略1: 检查依赖 ==="
-        cd ${{ env.MAIN_PROJECT }}
-        cargo check --target aarch64-linux-android
-        
-    - name: Strategy 2: cargo-apk build
-      run: |
-        echo "=== 策略2: cargo-apk构建 ==="
-        cd ${{ env.MAIN_PROJECT }}
-        cargo clean
-        cargo apk build --release --target aarch64-linux-android --verbose
-        
-    - name: Strategy 3: Standard cargo build
-      if: failure()
-      run: |
-        echo "=== 策略3: 标准cargo构建 ==="
-        cd ${{ env.MAIN_PROJECT }}
-        cargo build --release --target aarch64-linux-android --verbose
-        
-    - name: Strategy 4: Different targets
-      if: failure()
-      run: |
-        echo "=== 策略4: 尝试不同目标 ==="
-        cd ${{ env.MAIN_PROJECT }}
-        for target in aarch64-linux-android armv7-linux-androideabi; do
-          echo "尝试目标: $target"
-          cargo build --release --target $target --verbose || echo "目标 $target 失败"
-        done
-        
-    - name: Strategy 5: Fix common issues
-      if: failure()
-      run: |
-        echo "=== 策略5: 修复常见问题 ==="
-        cd ${{ env.MAIN_PROJECT }}
-        
-        echo "检查rusqlite配置..."
-        if grep -q "rusqlite.*bundled" Cargo.toml; then
-          echo "修改rusqlite配置..."
-          sed -i 's/rusqlite = { version = "0.29", features = \["bundled"\] }/rusqlite = { version = "0.29", features = ["bundled"], default-features = false }/' Cargo.toml
-          cat Cargo.toml
-        fi
-        
-        echo "重新尝试构建..."
-        cargo build --release --target aarch64-linux-android --verbose
-        
-    - name: Comprehensive artifact analysis
-      run: |
-        echo "=== 全面构建产物分析 ==="
-        
-        echo "搜索所有.so文件:"
-        find . -name "*.so" -exec ls -la {} \; 2>/dev/null || echo "未找到.so文件"
-        
-        echo "搜索所有APK文件:"
-        find . -name "*.apk" -exec ls -la {} \; 2>/dev/null || echo "未找到APK文件"
-        
-        echo "搜索所有.a文件:"
-        find . -name "*.a" -exec ls -la {} \; 2>/dev/null || echo "未找到.a文件"
-        
-        echo "分析target目录结构:"
-        find . -type d -name "target" -exec find {} -type f \; 2>/dev/null | head -20 || echo "无target目录"
-        
-    - name: Manual APK creation
-      run: |
-        echo "=== 手动创建APK ==="
-        
-        SO_FILE=$(find . -name "*.so" -type f | head -1)
-        
-        if [ -n "$SO_FILE" ]; then
-          echo "找到.so文件: $SO_FILE"
-          
-          mkdir -p manual_apk/lib/arm64-v8a
-          cp "$SO_FILE" manual_apk/lib/arm64-v8a/
-          
-          echo '<?xml version="1.0" encoding="utf-8"?>' > manual_apk/AndroidManifest.xml
-          echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.userdata_rust" android:versionCode="1" android:versionName="1.0">' >> manual_apk/AndroidManifest.xml
-          echo '<application android:label="userdata_rust"></application>' >> manual_apk/AndroidManifest.xml
-          echo '</manifest>' >> manual_apk/AndroidManifest.xml
-          
-          cd manual_apk
-          zip -r ../manual_apk.apk .
-          cd ..
-          
-          echo "手动创建APK: manual_apk.apk"
-          ls -la manual_apk.apk
-        else
-          echo "未找到.so文件，无法手动创建APK"
-        fi
-        
-    - name: Upload all results
-      if: always()
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: comprehensive-results
-        path: |
-          ${{ env.MAIN_PROJECT }}/target/
-          manual_apk.apk
-          ${{ env.MAIN_PROJECT }}/Cargo.toml
-        retention-days: 7
+        name: android-apk
+        path: userdata_rust/android/build/outputs/apk/release/android-release.apk
+        retention-days: 30
