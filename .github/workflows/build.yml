@@ -48,144 +48,46 @@ jobs:
     - name: Install cargo-apk
       run: cargo install cargo-apk
       
-    - name: Auto-detect project directory
+    - name: Find project directory
       run: |
         ROOT_DIR=$(pwd)
         echo "ROOT_DIR=$ROOT_DIR" >> $GITHUB_ENV
+        CARGO_DIR=$(find . -name "Cargo.toml" -exec dirname {} \; | head -1)
+        echo "CARGO_DIR=$CARGO_DIR" >> $GITHUB_ENV
         
-        CARGO_DIRS=$(find . -name "Cargo.toml" -exec dirname {} \;)
-        if [ -n "$CARGO_DIRS" ]; then
-          PROJECT_DIR=$(echo "$CARGO_DIRS" | head -1 | sed 's/^\.\///')
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-        else
-          echo "ERROR: No Cargo.toml found"
-          exit 1
-        fi
-        
-    - name: Check dependencies compatibility
+    - name: Show project structure
       run: |
-        cd "${{ env.PROJECT_DIR }}"
-        echo "=== Checking dependencies ==="
-        echo "Current directory: $(pwd)"
-        echo "Cargo.toml dependencies:"
-        grep -A 20 "\[dependencies\]" Cargo.toml
+        echo "Root directory: ${{ env.ROOT_DIR }}"
+        echo "Cargo directory: ${{ env.CARGO_DIR }}"
+        cd ${{ env.CARGO_DIR }}
+        pwd
+        ls -la
+        cat Cargo.toml
         
-        # 检查是否有Android不兼容的依赖
-        echo ""
-        echo "=== Checking for problematic dependencies ==="
-        if grep -q "rusqlite.*bundled" Cargo.toml; then
-          echo "WARNING: rusqlite with bundled feature might cause issues on Android"
-        fi
-        
-    - name: Try build with verbose output
+    - name: Check dependencies
       run: |
-        cd "${{ env.PROJECT_DIR }}"
-        echo "=== Building with verbose output ==="
-        echo "Working directory: $(pwd)"
-        
-        # 先清理
-        cargo clean
-        
-        # 使用 verbose 模式构建，直接显示错误
-        echo "Starting cargo apk build with verbose output..."
-        cargo apk build --release --target aarch64-linux-android --verbose
-        
-    - name: Alternative build attempt
-      if: failure()
-      run: |
-        cd "${{ env.PROJECT_DIR }}"
-        echo "=== Alternative build attempt ==="
-        
-        # 检查是否是依赖问题
-        echo "Checking if dependencies can be fetched..."
+        cd ${{ env.CARGO_DIR }}
+        echo "Checking dependencies..."
         cargo check --target aarch64-linux-android
         
-        echo ""
-        echo "Trying to build without APK wrapper..."
-        cargo build --release --target aarch64-linux-android
-        
-    - name: Check Android-specific issues
-      if: failure()
+    - name: Try verbose build
       run: |
-        cd "${{ env.PROJECT_DIR }}"
-        echo "=== Checking Android-specific issues ==="
-        
-        # 检查 JNI 使用
-        echo "JNI usage in code:"
-        find . -name "*.rs" -exec grep -l "jni\|JNIEnv" {} \; | head -5
-        
-        # 检查是否有 main 函数（Android库不应该有）
-        echo ""
-        echo "Checking for main function (should not exist in Android lib):"
-        find . -name "*.rs" -exec grep -l "fn main" {} \; | head -5
-        
-        # 检查库函数导出
-        echo ""
-        echo "Checking for exported functions:"
-        find . -name "*.rs" -exec grep -l "#\[no_mangle\]" {} \; | head -5
-        
-    - name: Fix common Android issues
-      if: failure()
-      run: |
-        cd "${{ env.PROJECT_DIR }}"
-        echo "=== Attempting to fix common Android issues ==="
-        
-        # 检查并移除可能有问题的依赖
-        if grep -q "tiny_http" Cargo.toml; then
-          echo "WARNING: tiny_http might not be suitable for Android"
-          echo "Consider using Android-specific HTTP libraries"
-        fi
-        
-        # 检查 rusqlite 配置
-        if grep -q "rusqlite.*bundled" Cargo.toml; then
-          echo "Modifying rusqlite configuration for Android..."
-          sed -i 's/rusqlite = { version = "0.29", features = \["bundled"\] }/rusqlite = { version = "0.29", features = ["bundled"], default-features = false }/' Cargo.toml
-          cat Cargo.toml
-        fi
-        
-        echo ""
-        echo "Trying build again with modified configuration..."
+        cd ${{ env.CARGO_DIR }}
+        echo "Starting verbose build..."
         cargo apk build --release --target aarch64-linux-android --verbose
         
-    - name: Final attempt with minimal config
-      if: failure()
+    - name: Check build results
+      if: always()
       run: |
-        cd "${{ env.PROJECT_DIR }}"
-        echo "=== Final attempt with minimal configuration ==="
+        cd ${{ env.CARGO_DIR }}
+        echo "Checking build results..."
+        find target -name "*.so" 2>/dev/null || echo "No .so files"
+        find target -name "*.apk" 2>/dev/null || echo "No APK files"
         
-        # 创建最小化的 Cargo.toml 用于测试
-        cp Cargo.toml Cargo.toml.full
-        cat > Cargo.toml << 'EOF'
-[package]
-name = "userdata_rust"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-jni = "0.21"
-android_logger = "0.13"
-log = "0.4"
-
-[package.metadata.android]
-package = "com.example.userdata_rust"
-target_sdk_version = 34
-min_sdk_version = 21
-build_targets = ["aarch64-linux-android"]
-EOF
-        
-        echo "Testing with minimal dependencies..."
-        cargo apk build --release --target aarch64-linux-android --verbose
-        
-    - name: Upload all logs for analysis
+    - name: Upload debug info
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-logs
-        path: |
-          ${{ env.PROJECT_DIR }}/Cargo.toml
-          ${{ env.PROJECT_DIR }}/Cargo.toml.full
-          ${{ env.PROJECT_DIR }}/target/
+        name: debug-info
+        path: ${{ env.CARGO_DIR }}/target
         retention-days: 7
