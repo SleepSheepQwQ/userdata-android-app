@@ -50,195 +50,142 @@ jobs:
       
     - name: Auto-detect project directory
       run: |
-        echo "=== Auto-detecting project structure ==="
         ROOT_DIR=$(pwd)
         echo "ROOT_DIR=$ROOT_DIR" >> $GITHUB_ENV
         
-        # 显示当前目录结构
-        echo "Current directory structure:"
-        find . -maxdepth 2 -type d | sort
-        
-        # 查找所有包含 Cargo.toml 的目录
         CARGO_DIRS=$(find . -name "Cargo.toml" -exec dirname {} \;)
-        echo "Found Cargo.toml in directories: $CARGO_DIRS"
-        
-        # 选择第一个找到的目录作为项目目录
         if [ -n "$CARGO_DIRS" ]; then
           PROJECT_DIR=$(echo "$CARGO_DIRS" | head -1 | sed 's/^\.\///')
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          echo "Selected project directory: $PROJECT_DIR"
         else
-          echo "ERROR: No Cargo.toml found anywhere"
-          echo "PROJECT_DIR=." >> $GITHUB_ENV
+          echo "ERROR: No Cargo.toml found"
           exit 1
         fi
         
-    - name: Verify project structure
-      run: |
-        echo "=== Verifying project structure ==="
-        echo "ROOT_DIR: ${{ env.ROOT_DIR }}"
-        echo "PROJECT_DIR: ${{ env.PROJECT_DIR }}"
-        
-        # 验证项目目录存在
-        if [ ! -d "${{ env.PROJECT_DIR }}" ]; then
-          echo "ERROR: Project directory ${{ env.PROJECT_DIR }} does not exist"
-          exit 1
-        fi
-        
-        # 进入项目目录并验证
-        cd "${{ env.PROJECT_DIR }}"
-        echo "Current directory after cd: $(pwd)"
-        echo "Files in directory:"
-        ls -la
-        
-        if [ -f "Cargo.toml" ]; then
-          echo "SUCCESS: Cargo.toml found"
-          echo "Cargo.toml content preview:"
-          head -10 Cargo.toml
-        else
-          echo "ERROR: Cargo.toml not found in $(pwd)"
-          exit 1
-        fi
-        
-    - name: Fix Cargo configuration
+    - name: Check dependencies compatibility
       run: |
         cd "${{ env.PROJECT_DIR }}"
-        echo "=== Fixing Cargo configuration ==="
-        echo "Working in: $(pwd)"
+        echo "=== Checking dependencies ==="
+        echo "Current directory: $(pwd)"
+        echo "Cargo.toml dependencies:"
+        grep -A 20 "\[dependencies\]" Cargo.toml
         
-        # 备份原文件
-        cp Cargo.toml Cargo.toml.backup
-        
-        # 检查并添加 [lib] 和 cdylib
-        if ! grep -q "crate-type.*cdylib" Cargo.toml; then
-          echo "Adding cdylib configuration..."
-          if grep -q "\[lib\]" Cargo.toml; then
-            sed -i '/\[lib\]/a crate-type = ["cdylib"]' Cargo.toml
-          else
-            echo "" >> Cargo.toml
-            echo "[lib]" >> Cargo.toml
-            echo 'crate-type = ["cdylib"]' >> Cargo.toml
-          fi
+        # 检查是否有Android不兼容的依赖
+        echo ""
+        echo "=== Checking for problematic dependencies ==="
+        if grep -q "rusqlite.*bundled" Cargo.toml; then
+          echo "WARNING: rusqlite with bundled feature might cause issues on Android"
         fi
         
-        # 检查并添加 Android 配置
-        if ! grep -q "package.metadata.android" Cargo.toml; then
-          echo "" >> Cargo.toml
-          echo "[package.metadata.android]" >> Cargo.toml
-          echo 'package = "com.example.userdata_rust"' >> Cargo.toml
-          echo "target_sdk_version = 34" >> Cargo.toml
-          echo "min_sdk_version = 21" >> Cargo.toml
-        fi
-        
-        echo "Updated Cargo.toml:"
-        cat Cargo.toml
-        
-    - name: Build APK
+    - name: Try build with verbose output
       run: |
         cd "${{ env.PROJECT_DIR }}"
-        echo "=== Building APK ==="
-        echo "Working in: $(pwd)"
+        echo "=== Building with verbose output ==="
+        echo "Working directory: $(pwd)"
         
-        # 清理之前的构建
+        # 先清理
         cargo clean
         
-        # 构建
-        echo "Starting cargo apk build..."
-        cargo apk build --release --target aarch64-linux-android > build.log 2>&1
-        BUILD_RESULT=$?
-        echo "BUILD_RESULT=$BUILD_RESULT" >> $GITHUB_ENV
+        # 使用 verbose 模式构建，直接显示错误
+        echo "Starting cargo apk build with verbose output..."
+        cargo apk build --release --target aarch64-linux-android --verbose
         
-        # 显示构建结果
-        echo "Build completed with status: $BUILD_RESULT"
-        echo "Last 50 lines of build log:"
-        tail -50 build.log
-        
-    - name: Check build artifacts
+    - name: Alternative build attempt
+      if: failure()
       run: |
         cd "${{ env.PROJECT_DIR }}"
-        echo "=== Checking build artifacts ==="
-        echo "Working in: $(pwd)"
+        echo "=== Alternative build attempt ==="
         
-        # 查找动态库
-        echo "Looking for .so files:"
-        find target -name "*.so" -exec ls -la {} \; 2>/dev/null || echo "No .so files found"
+        # 检查是否是依赖问题
+        echo "Checking if dependencies can be fetched..."
+        cargo check --target aarch64-linux-android
         
-        # 查找APK
-        echo "Looking for APK files:"
-        find target -name "*.apk" -exec ls -la {} \; 2>/dev/null || echo "No APK files found"
+        echo ""
+        echo "Trying to build without APK wrapper..."
+        cargo build --release --target aarch64-linux-android
         
-        # 检查target目录结构
-        echo "Target directory structure:"
-        find target -type d | head -10 2>/dev/null || echo "No target directory structure"
-        
-    - name: Find and prepare APK
+    - name: Check Android-specific issues
+      if: failure()
       run: |
-        cd "${{ env.ROOT_DIR }}"
-        echo "=== Finding APK ==="
-        echo "Working in: $(pwd)"
+        cd "${{ env.PROJECT_DIR }}"
+        echo "=== Checking Android-specific issues ==="
         
-        # 从根目录搜索所有APK
-        APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        # 检查 JNI 使用
+        echo "JNI usage in code:"
+        find . -name "*.rs" -exec grep -l "jni\|JNIEnv" {} \; | head -5
         
-        if [ -n "$APK_PATH" ]; then
-          echo "Found APK: $APK_PATH"
-          echo "APK size: $(ls -lh $APK_PATH | awk '{print $5}')"
-          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
-          
-          # 检查APK内容
-          APK_DIR=$(dirname "$APK_PATH")
-          APK_NAME=$(basename "$APK_PATH" .apk)
-          EXTRACTED_DIR="$APK_DIR/${APK_NAME}_extracted"
-          
-          mkdir -p "$EXTRACTED_DIR"
-          unzip -q "$APK_PATH" -d "$EXTRACTED_DIR"
-          
-          echo "APK contents:"
-          find "$EXTRACTED_DIR" -type f | head -20
-          
-          # 检查是否有lib目录
-          if [ -d "$EXTRACTED_DIR/lib" ]; then
-            echo "Found lib directory with:"
-            find "$EXTRACTED_DIR/lib" -name "*.so" | head -10
-          else
-            echo "WARNING: No lib directory found in APK"
-          fi
-        else
-          echo "ERROR: No APK found"
-          echo "APK_PATH=" >> $GITHUB_ENV
+        # 检查是否有 main 函数（Android库不应该有）
+        echo ""
+        echo "Checking for main function (should not exist in Android lib):"
+        find . -name "*.rs" -exec grep -l "fn main" {} \; | head -5
+        
+        # 检查库函数导出
+        echo ""
+        echo "Checking for exported functions:"
+        find . -name "*.rs" -exec grep -l "#\[no_mangle\]" {} \; | head -5
+        
+    - name: Fix common Android issues
+      if: failure()
+      run: |
+        cd "${{ env.PROJECT_DIR }}"
+        echo "=== Attempting to fix common Android issues ==="
+        
+        # 检查并移除可能有问题的依赖
+        if grep -q "tiny_http" Cargo.toml; then
+          echo "WARNING: tiny_http might not be suitable for Android"
+          echo "Consider using Android-specific HTTP libraries"
         fi
         
-    - name: Upload APK
-      if: env.BUILD_RESULT == '0' && env.APK_PATH != ''
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-apk
-        path: ${{ env.APK_PATH }}
-        retention-days: 30
+        # 检查 rusqlite 配置
+        if grep -q "rusqlite.*bundled" Cargo.toml; then
+          echo "Modifying rusqlite configuration for Android..."
+          sed -i 's/rusqlite = { version = "0.29", features = \["bundled"\] }/rusqlite = { version = "0.29", features = ["bundled"], default-features = false }/' Cargo.toml
+          cat Cargo.toml
+        fi
         
-    - name: Upload debug information
+        echo ""
+        echo "Trying build again with modified configuration..."
+        cargo apk build --release --target aarch64-linux-android --verbose
+        
+    - name: Final attempt with minimal config
+      if: failure()
+      run: |
+        cd "${{ env.PROJECT_DIR }}"
+        echo "=== Final attempt with minimal configuration ==="
+        
+        # 创建最小化的 Cargo.toml 用于测试
+        cp Cargo.toml Cargo.toml.full
+        cat > Cargo.toml << 'EOF'
+[package]
+name = "userdata_rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.21"
+android_logger = "0.13"
+log = "0.4"
+
+[package.metadata.android]
+package = "com.example.userdata_rust"
+target_sdk_version = 34
+min_sdk_version = 21
+build_targets = ["aarch64-linux-android"]
+EOF
+        
+        echo "Testing with minimal dependencies..."
+        cargo apk build --release --target aarch64-linux-android --verbose
+        
+    - name: Upload all logs for analysis
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-debug
+        name: build-logs
         path: |
-          ${{ env.PROJECT_DIR }}/build.log
           ${{ env.PROJECT_DIR }}/Cargo.toml
-          ${{ env.PROJECT_DIR }}/Cargo.toml.backup
+          ${{ env.PROJECT_DIR }}/Cargo.toml.full
+          ${{ env.PROJECT_DIR }}/target/
         retention-days: 7
-        
-    - name: Final report
-      if: always()
-      run: |
-        echo "=== Build Summary ==="
-        echo "Root directory: ${{ env.ROOT_DIR }}"
-        echo "Project directory: ${{ env.PROJECT_DIR }}"
-        echo "Build result: ${{ env.BUILD_RESULT }}"
-        echo "APK path: ${{ env.APK_PATH }}"
-        
-        if [ "${{ env.BUILD_RESULT }}" == "0" ] && [ -n "${{ env.APK_PATH }}" ]; then
-          echo "SUCCESS: APK built and uploaded"
-        else
-          echo "FAILED: Build failed or APK not found"
-          echo "Check debug artifacts for details"
-        fi
