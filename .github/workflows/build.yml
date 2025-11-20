@@ -20,14 +20,13 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Setup Android SDK with latest cmdline-tools
+    - name: Setup Android SDK
       run: |
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
         unzip -q commandlinetools-linux-11076708_latest.zip
         mkdir -p $HOME/android-sdk/cmdline-tools/latest
         mv cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/
         
-        # 设置所有必要的环境变量
         echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
         echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
         echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
@@ -36,7 +35,16 @@ jobs:
     - name: Install Android components
       run: |
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-30" "platforms;android-34" "build-tools;30.0.3" "build-tools;34.0.0"
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+          "platform-tools" \
+          "platforms;android-34" \
+          "build-tools;34.0.0" \
+          "ndk;25.1.8937393"
+
+    - name: Set NDK environment
+      run: |
+        echo "NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -46,92 +54,36 @@ jobs:
     - name: Install cargo-apk
       run: cargo install cargo-apk
 
-    - name: Build APK with error capture
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build APK
       run: |
-        cd userdata_rust
         cargo apk build --release --target aarch64-linux-android 2>&1 | tee build.log
         echo "BUILD_STATUS=$?" >> $GITHUB_ENV
 
-    - name: Extract and display errors
-      if: always() && env.BUILD_STATUS != '0'
-      run: |
-        cd userdata_rust
-        echo "🔍 === COMPILATION ERRORS SUMMARY ==="
-        echo ""
-        
-        # 显示具体的编译错误
-        echo "❌ Rust Compilation Errors:"
-        grep -E "^error\[|^   --> [0-9]+:[0-9]+|help:|note:" build.log | head -20 || echo "No specific compilation errors found"
-        
-        echo ""
-        echo "🔧 Error Codes Found:"
-        grep -oE "E[0-9]{4}" build.log | sort -u | tr '\n' ' ' || echo "No error codes found"
-        
-        echo ""
-        echo "📄 Last 10 lines of output:"
-        tail -10 build.log
-        
-        echo ""
-        echo "💡 Quick Fix Suggestions:"
-        echo "- Check for missing imports or type mismatches"
-        echo "- Verify all dependencies are compatible"
-        echo "- Look for outdated syntax or deprecated APIs"
-
-    - name: Find and upload APK
+    - name: Find APK
       if: success()
       run: |
-        echo "🔍 Searching for generated APK files..."
-        
-        # 搜索所有可能的APK位置
-        APK_PATHS=$(find userdata_rust -name "*.apk" -type f 2>/dev/null)
-        
-        if [ -n "$APK_PATHS" ]; then
-          echo "✅ Found APK files:"
-          echo "$APK_PATHS"
-          
-          # 使用第一个找到的APK
-          FIRST_APK=$(echo "$APK_PATHS" | head -1)
-          echo "APK_PATH=$FIRST_APK" >> $GITHUB_ENV
-          echo "📦 Using APK: $FIRST_APK"
-        else
-          echo "❌ No APK files found!"
-          echo ""
-          echo "📁 Directory structure:"
-          find userdata_rust -type d -name "*apk*" 2>/dev/null || echo "No APK directories found"
-          echo ""
-          echo "📄 Target directory contents:"
-          ls -la userdata_rust/target/ 2>/dev/null || echo "No target directory"
-          echo ""
-          echo "🔍 Searching for any build artifacts:"
-          find userdata_rust/target -type f -name "*userdata*" 2>/dev/null || echo "No userdata artifacts found"
-          
-          # 设置一个默认路径以避免后续步骤失败
-          echo "APK_PATH=" >> $GITHUB_ENV
-        fi
+        APK_PATH=$(find target -name "*.apk" -type f | head -1)
+        echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
 
-    - name: Upload APK artifact
+    - name: Upload APK
       if: success() && env.APK_PATH != ''
       uses: actions/upload-artifact@v4
       with:
         name: userdata-rust-apk
         path: ${{ env.APK_PATH }}
-        retention-days: 30
 
-    - name: Upload build log for debugging
-      if: always() && env.BUILD_STATUS != '0'
+    - name: Upload build log
+      if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: build-error-log
-        path: userdata_rust/build.log
-        retention-days: 7
-
-    - name: Final status
-      if: always()
-      run: |
-        if [ "${{ env.BUILD_STATUS }}" == "0" ] && [ -n "${{ env.APK_PATH }}" ]; then
-          echo "🎉 Build successful! APK uploaded."
-        elif [ "${{ env.BUILD_STATUS }}" == "0" ]; then
-          echo "⚠️ Build completed but no APK found. Check the logs above."
-        else
-          echo "❌ Build failed. Check the error logs."
-        fi
+        name: build-log
+        path: build.log
