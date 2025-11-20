@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::collections::HashMap;
+use std::io::Read;  // 修复1: 添加缺失的导入
 use once_cell::sync::Lazy;
 use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
 use crossbeam_channel::{self, Sender, Receiver};
@@ -168,7 +169,8 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
     }
 }
 
-fn start_http_server(config: Server_config, shutdown_rx: Receiver<()>) {
+// 修复2: 修正参数名大小写
+fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     if !std::path::Path::new(&config.db_path).exists() {
         error!("Database file not found: {}", config.db_path);
         return;
@@ -194,7 +196,7 @@ fn start_http_server(config: Server_config, shutdown_rx: Receiver<()>) {
     info!("Server started on {}", addr);
     
     loop {
-        select! {
+        crossbeam_channel::select! {  // 修复3: 使用完整的select!宏路径
             // 接收请求
             recv(server.recv()) -> request_result => {
                 match request_result {
@@ -232,8 +234,9 @@ fn handle_request(request: Request, conn: Arc<Connection>) {
                 "/config" => {
                     let config = CONFIG.lock().unwrap().clone();
                     let json = serde_json::to_string(&config).unwrap_or_default();
+                    // 修复4: 明确指定Header类型
                     let response = Response::from_string(json)
-                        .with_header("Content-Type: application/json".parse().unwrap());
+                        .with_header("Content-Type: application/json".parse::<tiny_http::Header>().unwrap());
                     let _ = request.respond(response);
                 }
                 _ => {
@@ -253,14 +256,16 @@ fn handle_request(request: Request, conn: Arc<Connection>) {
                     let result = query_database(&conn, &form_data);
                     let json = serde_json::to_string(&result).unwrap_or_default();
                     
+                    // 修复5: 明确指定Header类型
                     let response = Response::from_string(json)
-                        .with_header("Content-Type: application/json".parse().unwrap());
+                        .with_header("Content-Type: application/json".parse::<tiny_http::Header>().unwrap());
                     let _ = request.respond(response);
                 }
                 "/stats" => {
                     let stats = get_database_stats(&conn);
+                    // 修复6: 明确指定Header类型
                     let response = Response::from_string(stats)
-                        .with_header("Content-Type: text/html".parse().unwrap());
+                        .with_header("Content-Type: text/html".parse::<tiny_http::Header>().unwrap());
                     let _ = request.respond(response);
                 }
                 _ => {
