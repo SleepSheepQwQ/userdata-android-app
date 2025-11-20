@@ -77,6 +77,46 @@ jobs:
         echo "- Verify all dependencies are compatible"
         echo "- Look for outdated syntax or deprecated APIs"
 
+    - name: Find and upload APK
+      if: success()
+      run: |
+        echo "🔍 Searching for generated APK files..."
+        
+        # 搜索所有可能的APK位置
+        APK_PATHS=$(find userdata_rust -name "*.apk" -type f 2>/dev/null)
+        
+        if [ -n "$APK_PATHS" ]; then
+          echo "✅ Found APK files:"
+          echo "$APK_PATHS"
+          
+          # 使用第一个找到的APK
+          FIRST_APK=$(echo "$APK_PATHS" | head -1)
+          echo "APK_PATH=$FIRST_APK" >> $GITHUB_ENV
+          echo "📦 Using APK: $FIRST_APK"
+        else
+          echo "❌ No APK files found!"
+          echo ""
+          echo "📁 Directory structure:"
+          find userdata_rust -type d -name "*apk*" 2>/dev/null || echo "No APK directories found"
+          echo ""
+          echo "📄 Target directory contents:"
+          ls -la userdata_rust/target/ 2>/dev/null || echo "No target directory"
+          echo ""
+          echo "🔍 Searching for any build artifacts:"
+          find userdata_rust/target -type f -name "*userdata*" 2>/dev/null || echo "No userdata artifacts found"
+          
+          # 设置一个默认路径以避免后续步骤失败
+          echo "APK_PATH=" >> $GITHUB_ENV
+        fi
+
+    - name: Upload APK artifact
+      if: success() && env.APK_PATH != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: userdata-rust-apk
+        path: ${{ env.APK_PATH }}
+        retention-days: 30
+
     - name: Upload build log for debugging
       if: always() && env.BUILD_STATUS != '0'
       uses: actions/upload-artifact@v4
@@ -85,10 +125,13 @@ jobs:
         path: userdata_rust/build.log
         retention-days: 7
 
-    - name: Upload APK artifact
-      if: success()
-      uses: actions/upload-artifact@v4
-      with:
-        name: userdata-rust-apk
-        path: userdata_rust/target/aarch64-linux-android/release/apk/userdata_rust.apk
-        retention-days: 30
+    - name: Final status
+      if: always()
+      run: |
+        if [ "${{ env.BUILD_STATUS }}" == "0" ] && [ -n "${{ env.APK_PATH }}" ]; then
+          echo "🎉 Build successful! APK uploaded."
+        elif [ "${{ env.BUILD_STATUS }}" == "0" ]; then
+          echo "⚠️ Build completed but no APK found. Check the logs above."
+        else
+          echo "❌ Build failed. Check the error logs."
+        fi
