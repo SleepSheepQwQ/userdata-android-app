@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::collections::HashMap;
+use std::io::Read;
 use once_cell::sync::Lazy;
 use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
 use crossbeam_channel::{self, Sender, Receiver};
@@ -18,13 +19,6 @@ struct UserInfo {
     email: Option<String>,
     phone: Option<String>,
     qq: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct QueryForm {
-    phone: Option<String>,
-    qq: Option<String>,
-    email: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -194,34 +188,31 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     info!("Server started on {}", addr);
     
     loop {
-        crossbeam_channel::select! {
-            // 接收请求
-            recv(server.recv()) -> request_result => {
-                match request_result {
-                    Ok(Some(request)) => {
-                        let conn_clone = Arc::clone(&conn);
-                        thread::spawn(move || {
-                            handle_request(request, conn_clone);
-                        });
-                    }
-                    Ok(None) => break, // Server closed
-                    Err(e) => {
-                        error!("Error receiving request: {}", e);
-                        break;
-                    }
-                }
+        // 检查关闭信号
+        if shutdown_rx.try_recv().is_ok() {
+            info!("Shutdown signal received, stopping server.");
+            break;
+        }
+        
+        // 非阻塞接收请求
+        match server.try_recv() {
+            Ok(Some(request)) => {
+                let conn_clone = Arc::clone(&conn);
+                thread::spawn(move || {
+                    handle_request(request, conn_clone);
+                });
             }
-            // 接收关闭信号
-            recv(shutdown_rx.recv()) -> _ => {
-                info!("Shutdown signal received, stopping server.");
-                break;
+            Ok(None) => break, // Server closed
+            Err(_) => {
+                // 没有请求，短暂休眠
+                thread::sleep(std::time::Duration::from_millis(10));
+                continue;
             }
         }
     }
     info!("Server loop ended.");
 }
 
-// 修复1: 添加mut到request参数
 fn handle_request(mut request: Request, conn: Arc<Connection>) {
     match request.method() {
         Method::Get => {
@@ -248,10 +239,9 @@ fn handle_request(mut request: Request, conn: Arc<Connection>) {
             match request.url() {
                 "/query" => {
                     let mut content = String::new();
-                    // 修复2: 使用正确的读取方法
-                    let mut body = request.as_reader();
+                    // 修复: 确保Read trait在作用域内
                     use std::io::Read;
-                    let _ = body.read_to_string(&mut content);
+                    let _ = request.as_reader().read_to_string(&mut content);
                     
                     let form_data = parse_form_data(&content);
                     let result = query_database(&conn, &form_data);
