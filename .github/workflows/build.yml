@@ -35,13 +35,7 @@ jobs:
     - name: Install Android components
       run: |
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-          "platform-tools" \
-          "platforms;android-30" \
-          "platforms;android-34" \
-          "build-tools;30.0.3" \
-          "build-tools;34.0.0" \
-          "ndk;25.1.8937393"
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-30" "platforms;android-34" "build-tools;30.0.3" "build-tools;34.0.0" "ndk;25.1.8937393"
         
         echo "NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
@@ -58,7 +52,7 @@ jobs:
       run: |
         echo "🔍 === 深度项目诊断 ==="
         
-        # 1. 查找所有 Cargo.toml 文件
+        # 查找所有 Cargo.toml 文件
         CARGO_FILES=$(find . -name "Cargo.toml" -type f)
         echo "发现的 Cargo.toml："
         echo "$CARGO_FILES"
@@ -68,7 +62,7 @@ jobs:
           exit 1
         fi
         
-        # 2. 智能选择主项目目录
+        # 智能选择主项目目录
         MAIN_PROJECT_DIR=""
         MAX_RS_COUNT=0
         
@@ -85,7 +79,7 @@ jobs:
         
         echo "✅ 选择主项目目录：$MAIN_PROJECT_DIR"
         
-        # 3. 进入项目目录并验证
+        # 进入项目目录并验证
         cd "$MAIN_PROJECT_DIR" || exit 1
         
         echo "📋 项目详细信息："
@@ -93,7 +87,7 @@ jobs:
         echo "Cargo.toml 内容："
         cat Cargo.toml
         
-        # 4. 关键配置检查
+        # 关键配置检查
         echo ""
         echo "🔧 === 关键配置检查 ==="
         
@@ -108,29 +102,29 @@ jobs:
           cp Cargo.toml Cargo.toml.backup
           
           # 添加 cdylib 配置
-          if grep -q '\[lib\]' Cargo.toml; then
+          if grep -q "\[lib\]" Cargo.toml; then
             # 如果已有 [lib] 部分，添加 crate-type
-            sed -i '/\[lib\]/a crate-type = ["cdylib"]' Cargo.toml
+            sed -i "/\[lib\]/a crate-type = [\"cdylib\"]" Cargo.toml
           else
             # 如果没有 [lib] 部分，添加完整配置
             echo "" >> Cargo.toml
             echo "[lib]" >> Cargo.toml
-            echo 'crate-type = ["cdylib"]' >> Cargo.toml
+            echo "crate-type = [\"cdylib\"]" >> Cargo.toml
           fi
           
           echo "🔧 修改后的 Cargo.toml："
           cat Cargo.toml
         fi
         
-        # 5. 检查 Android 元数据
+        # 检查 Android 元数据
         echo ""
         echo "📱 === Android 配置检查 ==="
-        if grep -q "\[package.metadata.android\]" Cargo.toml; then
+        if grep -q "package.metadata.android" Cargo.toml; then
           echo "✅ 找到 Android 配置"
-          grep -A 10 "\[package.metadata.android\]" Cargo.toml
+          grep -A 10 "package.metadata.android" Cargo.toml
         else
-          echo "⚠️  未找到 Android 配置，添加默认配置..."
-          cat >> Cargo.toml << 'EOF'
+          echo "⚠️ 未找到 Android 配置，添加默认配置..."
+          cat >> Cargo.toml << "EOF"
 
 [package.metadata.android]
 package = "com.example.userdata_rust"
@@ -144,11 +138,11 @@ EOF
         echo ""
         echo "🚀 === 开始构建 ==="
         
-        # 6. 清理之前的构建
+        # 清理之前的构建
         echo "🧹 清理之前的构建..."
         cargo clean
         
-        # 7. 详细构建
+        # 详细构建
         echo "🔨 开始详细构建..."
         if cargo apk build --release --target aarch64-linux-android --verbose 2>&1 | tee build.log; then
           echo "BUILD_STATUS=0" >> $GITHUB_ENV
@@ -158,7 +152,7 @@ EOF
           echo "❌ 构建失败"
         fi
         
-        # 8. 检查构建产物
+        # 检查构建产物
         echo ""
         echo "📦 === 构建产物检查 ==="
         echo "target 目录结构："
@@ -210,13 +204,6 @@ EOF
             else
               echo "❌ APK 中没有 lib 目录！"
             fi
-            
-            # 检查 AndroidManifest.xml
-            if [ -f "$APK_DIR/AndroidManifest.xml" ]; then
-              echo "✅ AndroidManifest.xml 存在"
-            else
-              echo "❌ AndroidManifest.xml 不存在"
-            fi
           done
         else
           echo "❌ 未找到任何 APK 文件"
@@ -243,7 +230,7 @@ EOF
         # 如果没找到好的，选择最大的
         if [ -z "$BEST_APK" ] && [ -n "$APK_FILES" ]; then
           BEST_APK=$(echo "$APK_FILES" | xargs ls -S | tail -1)
-          echo "⚠️  选择最大的 APK: $BEST_APK"
+          echo "⚠️ 选择最大的 APK: $BEST_APK"
         fi
         
         if [ -n "$BEST_APK" ]; then
