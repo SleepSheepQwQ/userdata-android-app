@@ -1,11 +1,10 @@
 use tiny_http::{Server, Request, Response, Method};
 use log::{info, LevelFilter, error, warn};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use once_cell::sync::Lazy;
 use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
 use crossbeam_channel::{self, Sender, Receiver};
@@ -38,9 +37,10 @@ impl Default for ServerConfig {
 
 static CONFIG: Lazy<Mutex<ServerConfig>> = Lazy::new(|| Mutex::new(ServerConfig::default()));
 
+// 修复1: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     config_json: JString,
 ) -> jstring {
@@ -55,7 +55,7 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
         return msg.into_raw();
     }
 
-    // 修复1: 正确的JNI 0.21.1字符串转换
+    // 现在可以正确使用get_string
     let config_str = match env.get_string(&config_json) {
         Ok(java_str) => java_str.to_string_lossy().to_string(),
         Err(_) => {
@@ -92,9 +92,10 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
     success.into_raw()
 }
 
+// 修复2: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_stopServer(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
     if !SERVER_RUNNING.load(Ordering::SeqCst) {
@@ -118,9 +119,10 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_stopServer(
     msg.into_raw()
 }
 
+// 修复3: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_getServerStatus(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
     let is_running = SERVER_RUNNING.load(Ordering::SeqCst);
@@ -129,13 +131,14 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_getServerStatus(
     msg.into_raw()
 }
 
+// 修复4: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     db_path: JString,
 ) -> jstring {
-    // 修复2: 正确的JNI 0.21.1字符串转换
+    // 现在可以正确使用get_string
     let path_str = match env.get_string(&db_path) {
         Ok(java_str) => java_str.to_string_lossy().to_string(),
         Err(_) => {
@@ -241,6 +244,7 @@ fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
             match request.url() {
                 "/query" => {
                     let mut content = String::new();
+                    use std::io::Read;
                     let _ = request.as_reader().read_to_string(&mut content);
                     
                     let form_data = parse_form_data(&content);
