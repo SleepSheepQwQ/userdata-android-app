@@ -54,11 +54,14 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
         return msg.into_raw();
     }
 
-    let config_str = match env.get_string(config_json) {
-        Ok(s) => s.to_string(),
-        Err(_) => {
-            let msg = env.new_string("Invalid config string").unwrap();
-            return msg.into_raw();
+    // 修复1: 正确的JNI字符串转换
+    let config_str = unsafe {
+        match env.get_string(config_json) {
+            Ok(s) => s.to_string_lossy().into_owned(),
+            Err(_) => {
+                let msg = env.new_string("Invalid config string").unwrap();
+                return msg.into_raw();
+            }
         }
     };
     
@@ -133,11 +136,14 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
     _class: JClass,
     db_path: JString,
 ) -> jstring {
-    let path_str = match env.get_string(db_path) {
-        Ok(s) => s.to_string(),
-        Err(_) => {
-            let msg = env.new_string("Invalid path string").unwrap();
-            return msg.into_raw();
+    // 修复2: 正确的JNI字符串转换
+    let path_str = unsafe {
+        match env.get_string(db_path) {
+            Ok(s) => s.to_string_lossy().into_owned(),
+            Err(_) => {
+                let msg = env.new_string("Invalid path string").unwrap();
+                return msg.into_raw();
+            }
         }
     };
     
@@ -161,7 +167,6 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
     }
 }
 
-// 修复1: 使用Arc<Mutex<Connection>>解决线程安全问题
 fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     if !std::path::Path::new(&config.db_path).exists() {
         error!("Database file not found: {}", config.db_path);
@@ -213,7 +218,6 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     info!("Server loop ended.");
 }
 
-// 修复2: 修改参数类型为Arc<Mutex<Connection>>
 fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
     match request.method() {
         Method::Get => {
@@ -240,11 +244,9 @@ fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
             match request.url() {
                 "/query" => {
                     let mut content = String::new();
-                    // 修复3: 直接使用request的reader
                     let _ = request.as_reader().read_to_string(&mut content);
                     
                     let form_data = parse_form_data(&content);
-                    // 修复4: 传递锁保护的连接
                     let result = query_database(&conn, &form_data);
                     let json = serde_json::to_string(&result).unwrap_or_default();
                     
@@ -253,7 +255,6 @@ fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
                     let _ = request.respond(response);
                 }
                 "/stats" => {
-                    // 修复5: 传递锁保护的连接
                     let stats = get_database_stats(&conn);
                     let response = Response::from_string(stats)
                         .with_header("Content-Type: text/html".parse::<tiny_http::Header>().unwrap());
@@ -284,7 +285,6 @@ fn parse_form_data(content: &str) -> HashMap<String, String> {
     form_data
 }
 
-// 修复6: 修改参数类型为Arc<Mutex<Connection>>
 fn query_database(conn: &Arc<Mutex<Connection>>, form_data: &HashMap<String, String>) -> Vec<UserInfo> {
     let mut results = Vec::new();
     
@@ -298,7 +298,6 @@ fn query_database(conn: &Arc<Mutex<Connection>>, form_data: &HashMap<String, Str
         return results;
     };
 
-    // 修复7: 使用锁保护数据库访问
     if let Ok(conn_guard) = conn.lock() {
         if let Ok(mut stmt) = conn_guard.prepare(sql) {
             if let Ok(rows) = stmt.query_map([&param], |row| {
@@ -320,9 +319,7 @@ fn query_database(conn: &Arc<Mutex<Connection>>, form_data: &HashMap<String, Str
     results
 }
 
-// 修复8: 修改参数类型为Arc<Mutex<Connection>>
 fn get_database_stats(conn: &Arc<Mutex<Connection>>) -> String {
-    // 修复9: 使用锁保护数据库访问
     if let Ok(conn_guard) = conn.lock() {
         let total_users = conn_guard.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
         let unique_phones = conn_guard.query_row("SELECT COUNT(DISTINCT phone) FROM users WHERE phone IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
