@@ -54,14 +54,12 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
         return msg.into_raw();
     }
 
-    // 修复1: 正确的JNI字符串转换
-    let config_str = unsafe {
-        match env.get_string(config_json) {
-            Ok(s) => s.to_string_lossy().into_owned(),
-            Err(_) => {
-                let msg = env.new_string("Invalid config string").unwrap();
-                return msg.into_raw();
-            }
+    // 简化：直接使用get_string()的返回值
+    let config_str = match env.get_string(config_json) {
+        Ok(s) => s.into(),
+        Err(_) => {
+            let msg = env.new_string("Invalid config string").unwrap();
+            return msg.into_raw();
         }
     };
     
@@ -136,14 +134,12 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
     _class: JClass,
     db_path: JString,
 ) -> jstring {
-    // 修复2: 正确的JNI字符串转换
-    let path_str = unsafe {
-        match env.get_string(db_path) {
-            Ok(s) => s.to_string_lossy().into_owned(),
-            Err(_) => {
-                let msg = env.new_string("Invalid path string").unwrap();
-                return msg.into_raw();
-            }
+    // 简化：直接使用get_string()的返回值
+    let path_str = match env.get_string(db_path) {
+        Ok(s) => s.into(),
+        Err(_) => {
+            let msg = env.new_string("Invalid path string").unwrap();
+            return msg.into_raw();
         }
     };
     
@@ -167,19 +163,12 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
     }
 }
 
+// 简化：每个请求创建独立连接，避免锁竞争
 fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     if !std::path::Path::new(&config.db_path).exists() {
         error!("Database file not found: {}", config.db_path);
         return;
     }
-
-    let conn = match Connection::open(&config.db_path) {
-        Ok(c) => Arc::new(Mutex::new(c)),
-        Err(e) => {
-            error!("Failed to open database: {}", e);
-            return;
-        }
-    };
 
     let addr = format!("127.0.0.1:{}", config.port);
     let server = match Server::http(&addr) {
@@ -192,6 +181,7 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
 
     info!("Server started on {}", addr);
     
+    // 简化：使用简单的阻塞接收
     loop {
         // 检查关闭信号
         if shutdown_rx.try_recv().is_ok() {
@@ -199,18 +189,17 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
             break;
         }
         
-        // 非阻塞接收请求
-        match server.try_recv() {
+        // 阻塞接收请求，但有超时
+        match server.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(Some(request)) => {
-                let conn_clone = Arc::clone(&conn);
+                let db_path = config.db_path.clone();
                 thread::spawn(move || {
-                    handle_request(request, conn_clone);
+                    handle_request(request, &db_path);
                 });
             }
             Ok(None) => break, // Server closed
             Err(_) => {
-                // 没有请求，短暂休眠
-                thread::sleep(std::time::Duration::from_millis(10));
+                // 超时，继续循环检查关闭信号
                 continue;
             }
         }
@@ -218,7 +207,8 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     info!("Server loop ended.");
 }
 
-fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
+// 简化：每个请求独立处理，不共享连接
+fn handle_request(mut request: Request, db_path: &str) {
     match request.method() {
         Method::Get => {
             match request.url() {
@@ -247,7 +237,7 @@ fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
                     let _ = request.as_reader().read_to_string(&mut content);
                     
                     let form_data = parse_form_data(&content);
-                    let result = query_database(&conn, &form_data);
+                    let result = query_database(db_path, &form_data);
                     let json = serde_json::to_string(&result).unwrap_or_default();
                     
                     let response = Response::from_string(json)
@@ -255,7 +245,7 @@ fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
                     let _ = request.respond(response);
                 }
                 "/stats" => {
-                    let stats = get_database_stats(&conn);
+                    let stats = get_database_stats(db_path);
                     let response = Response::from_string(stats)
                         .with_header("Content-Type: text/html".parse::<tiny_http::Header>().unwrap());
                     let _ = request.respond(response);
@@ -285,7 +275,8 @@ fn parse_form_data(content: &str) -> HashMap<String, String> {
     form_data
 }
 
-fn query_database(conn: &Arc<Mutex<Connection>>, form_data: &HashMap<String, String>) -> Vec<UserInfo> {
+// 简化：每次创建新连接，避免线程安全问题
+fn query_database(db_path: &str, form_data: &HashMap<String, String>) -> Vec<UserInfo> {
     let mut results = Vec::new();
     
     let (sql, param) = if let Some(phone) = form_data.get("phone") {
@@ -298,8 +289,8 @@ fn query_database(conn: &Arc<Mutex<Connection>>, form_data: &HashMap<String, Str
         return results;
     };
 
-    if let Ok(conn_guard) = conn.lock() {
-        if let Ok(mut stmt) = conn_guard.prepare(sql) {
+    if let Ok(conn) = Connection::open(db_path) {
+        if let Ok(mut stmt) = conn.prepare(sql) {
             if let Ok(rows) = stmt.query_map([&param], |row| {
                 Ok(UserInfo {
                     email: row.get(0).ok(),
@@ -319,12 +310,13 @@ fn query_database(conn: &Arc<Mutex<Connection>>, form_data: &HashMap<String, Str
     results
 }
 
-fn get_database_stats(conn: &Arc<Mutex<Connection>>) -> String {
-    if let Ok(conn_guard) = conn.lock() {
-        let total_users = conn_guard.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
-        let unique_phones = conn_guard.query_row("SELECT COUNT(DISTINCT phone) FROM users WHERE phone IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
-        let unique_qqs = conn_guard.query_row("SELECT COUNT(DISTINCT qq) FROM users WHERE qq IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
-        let unique_emails = conn_guard.query_row("SELECT COUNT(DISTINCT email) FROM users WHERE email IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+// 简化：每次创建新连接
+fn get_database_stats(db_path: &str) -> String {
+    if let Ok(conn) = Connection::open(db_path) {
+        let total_users = conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+        let unique_phones = conn.query_row("SELECT COUNT(DISTINCT phone) FROM users WHERE phone IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+        let unique_qqs = conn.query_row("SELECT COUNT(DISTINCT qq) FROM users WHERE qq IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
+        let unique_emails = conn.query_row("SELECT COUNT(DISTINCT email) FROM users WHERE email IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap_or(0);
 
         format!(r#"
         <h2>Database Statistics</h2>
@@ -336,6 +328,6 @@ fn get_database_stats(conn: &Arc<Mutex<Connection>>) -> String {
         </ul>
         "#, total_users, unique_phones, unique_qqs, unique_emails)
     } else {
-        "Database Error: Could not acquire lock".to_string()
+        "Database Error: Could not connect".to_string()
     }
 }
