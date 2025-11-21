@@ -37,7 +37,6 @@ impl Default for ServerConfig {
 
 static CONFIG: Lazy<Mutex<ServerConfig>> = Lazy::new(|| Mutex::new(ServerConfig::default()));
 
-// 修复1: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
     mut env: JNIEnv,
@@ -55,7 +54,6 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
         return msg.into_raw();
     }
 
-    // 现在可以正确使用get_string
     let config_str = match env.get_string(&config_json) {
         Ok(java_str) => java_str.to_string_lossy().to_string(),
         Err(_) => {
@@ -92,10 +90,9 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
     success.into_raw()
 }
 
-// 修复2: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_stopServer(
-    mut env: JNIEnv,
+    env: JNIEnv,  // 修复：移除不必要的mut
     _class: JClass,
 ) -> jstring {
     if !SERVER_RUNNING.load(Ordering::SeqCst) {
@@ -119,10 +116,9 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_stopServer(
     msg.into_raw()
 }
 
-// 修复3: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_getServerStatus(
-    mut env: JNIEnv,
+    env: JNIEnv,  // 修复：移除不必要的mut
     _class: JClass,
 ) -> jstring {
     let is_running = SERVER_RUNNING.load(Ordering::SeqCst);
@@ -131,14 +127,12 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_getServerStatus(
     msg.into_raw()
 }
 
-// 修复4: 添加 mut
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_testDatabase(
     mut env: JNIEnv,
     _class: JClass,
     db_path: JString,
 ) -> jstring {
-    // 现在可以正确使用get_string
     let path_str = match env.get_string(&db_path) {
         Ok(java_str) => java_str.to_string_lossy().to_string(),
         Err(_) => {
@@ -244,7 +238,7 @@ fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
             match request.url() {
                 "/query" => {
                     let mut content = String::new();
-                    use std::io::Read;
+                    // 修复：移除未使用的Read导入，直接使用as_reader()
                     let _ = request.as_reader().read_to_string(&mut content);
                     
                     let form_data = parse_form_data(&content);
