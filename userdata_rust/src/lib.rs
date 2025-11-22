@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::collections::HashMap;
+use std::io::Read;  // 添加这个导入
 use once_cell::sync::Lazy;
 use jni::{JNIEnv, objects::{JClass, JString}, sys::jstring};
 use crossbeam_channel::{self, Sender, Receiver};
@@ -83,7 +84,6 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
         info!("Server thread finished.");
     });
     
-    // 给服务器一点时间启动并检查是否成功
     thread::sleep(std::time::Duration::from_millis(500));
     
     let success = env.new_string("Server started successfully").unwrap();
@@ -92,7 +92,7 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_startServer(
 
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_stopServer(
-    env: JNIEnv,  // 修复：移除不必要的mut
+    mut env: JNIEnv,  // 添加mut保持一致性
     _class: JClass,
 ) -> jstring {
     if !SERVER_RUNNING.load(Ordering::SeqCst) {
@@ -104,8 +104,7 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_stopServer(
         let _ = tx.send(());
     }
     
-    // 等待服务器完全停止
-    for _ in 0..20 { // 最多等待2秒
+    for _ in 0..20 {
         if !SERVER_RUNNING.load(Ordering::SeqCst) {
             break;
         }
@@ -118,7 +117,7 @@ pub extern "C" fn Java_com_example_userdata_rust_MainActivity_stopServer(
 
 #[no_mangle]
 pub extern "C" fn Java_com_example_userdata_rust_MainActivity_getServerStatus(
-    env: JNIEnv,  // 修复：移除不必要的mut
+    mut env: JNIEnv,  // 添加mut保持一致性
     _class: JClass,
 ) -> jstring {
     let is_running = SERVER_RUNNING.load(Ordering::SeqCst);
@@ -187,13 +186,11 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
     info!("Server started on {}", addr);
     
     loop {
-        // 检查关闭信号
         if shutdown_rx.try_recv().is_ok() {
             info!("Shutdown signal received, stopping server.");
             break;
         }
         
-        // 非阻塞接收请求
         match server.try_recv() {
             Ok(Some(request)) => {
                 let conn_clone = Arc::clone(&conn);
@@ -201,9 +198,8 @@ fn start_http_server(config: ServerConfig, shutdown_rx: Receiver<()>) {
                     handle_request(request, conn_clone);
                 });
             }
-            Ok(None) => break, // Server closed
+            Ok(None) => break,
             Err(_) => {
-                // 没有请求，短暂休眠
                 thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }
@@ -238,7 +234,6 @@ fn handle_request(mut request: Request, conn: Arc<Mutex<Connection>>) {
             match request.url() {
                 "/query" => {
                     let mut content = String::new();
-                    // 修复：移除未使用的Read导入，直接使用as_reader()
                     let _ = request.as_reader().read_to_string(&mut content);
                     
                     let form_data = parse_form_data(&content);

@@ -41,31 +41,40 @@ jobs:
       with:
         targets: aarch64-linux-android
         
-    - name: Create .cargo directory
-      run: |
-        mkdir -p userdata_rust/.cargo
-        
-    - name: Create cargo config (standard way)
-      run: |
-        echo '[target.aarch64-linux-android]' > userdata_rust/.cargo/config.toml
-        echo 'linker = "aarch64-linux-android21-clang"' >> userdata_rust/.cargo/config.toml
-        echo 'ar = "llvm-ar"' >> userdata_rust/.cargo/config.toml
-        
-    - name: Setup Rust environment
+    - name: Setup Android toolchain with full paths
       run: |
         NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
         TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        echo "CC_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> $GITHUB_ENV
-        echo "CXX_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang++" >> $GITHUB_ENV
-        echo "AR_aarch64_linux_android=$TOOLCHAIN_PATH/llvm-ar" >> $GITHUB_ENV
-        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> $GITHUB_ENV
-        echo "$TOOLCHAIN_PATH" >> $GITHUB_PATH
         
-    - name: Build Rust library with explicit linker
+        # 创建符号链接到系统路径
+        sudo ln -sf "$TOOLCHAIN_PATH/aarch64-linux-android21-clang" /usr/local/bin/aarch64-linux-android21-clang
+        sudo ln -sf "$TOOLCHAIN_PATH/aarch64-linux-android21-clang++" /usr/local/bin/aarch64-linux-android21-clang++
+        sudo ln -sf "$TOOLCHAIN_PATH/llvm-ar" /usr/local/bin/llvm-ar
+        
+        # 设置环境变量
+        echo "CC_aarch64_linux_android=/usr/local/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
+        echo "CXX_aarch64_linux_android=/usr/local/bin/aarch64-linux-android21-clang++" >> $GITHUB_ENV
+        echo "AR_aarch64_linux_android=/usr/local/bin/llvm-ar" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=/usr/local/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
+        
+    - name: Create .cargo directory
+      run: mkdir -p userdata_rust/.cargo
+      
+    - name: Create cargo config with full paths
+      run: |
+        echo '[target.aarch64-linux-android]' > userdata_rust/.cargo/config.toml
+        echo 'linker = "/usr/local/bin/aarch64-linux-android21-clang"' >> userdata_rust/.cargo/config.toml
+        echo 'ar = "/usr/local/bin/llvm-ar"' >> userdata_rust/.cargo/config.toml
+        
+    - name: Verify toolchain
+      run: |
+        which aarch64-linux-android21-clang
+        which llvm-ar
+        /usr/local/bin/aarch64-linux-android21-clang --version
+        
+    - name: Build Rust library
       run: |
         cd userdata_rust
-        export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_HOME/ndk/25.1.8937393/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
-        export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$ANDROID_HOME/ndk/25.1.8937393/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         cargo build --release --target aarch64-linux-android
         
     - name: Build Android APK with Gradle
