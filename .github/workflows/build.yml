@@ -9,15 +9,18 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+    # 1. 代码检出
     - name: Checkout code
       uses: actions/checkout@v4
       
+    # 2. Java环境设置
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
         
+    # 3. Android SDK设置
     - name: Setup Android SDK
       run: |
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
@@ -28,6 +31,7 @@ jobs:
         echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
         echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
         
+    # 4. Android组件安装
     - name: Install Android components
       run: |
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
@@ -36,14 +40,17 @@ jobs:
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0"
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;25.1.8937393"
         
+    # 5. Rust工具链安装
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: aarch64-linux-android
         
+    # 6. Cargo配置目录创建
     - name: Create .cargo directory
       run: mkdir -p userdata_rust/.cargo
       
+    # 7. Cargo配置文件创建
     - name: Create cargo config with full paths
       run: |
         NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
@@ -53,6 +60,7 @@ jobs:
         echo "linker = \"$TOOLCHAIN_PATH/aarch64-linux-android21-clang\"" >> userdata_rust/.cargo/config.toml
         echo "ar = \"$TOOLCHAIN_PATH/llvm-ar\"" >> userdata_rust/.cargo/config.toml
         
+    # 8. Rust环境变量设置
     - name: Setup Rust environment
       run: |
         NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
@@ -65,16 +73,31 @@ jobs:
         echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$TOOLCHAIN_PATH/llvm-ar" >> $GITHUB_ENV
         echo "$TOOLCHAIN_PATH" >> $GITHUB_PATH
         
+    # 9. Rust库编译
     - name: Build Rust library
       run: |
         cd userdata_rust
         cargo build --release --target aarch64-linux-android
         
-    - name: Build Android APK with Gradle (fixed path)
+    # 10. Gradle Wrapper创建 (关键修复)
+    - name: Create missing gradlew
+      run: |
+        cd userdata_rust/android
+        echo '#!/bin/sh' > gradlew
+        echo 'exec gradle "$@"' >> gradlew
+        chmod +x gradlew
+        
+        # 下载gradle wrapper jar
+        mkdir -p gradle/wrapper
+        wget -q https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar -O gradle/wrapper/gradle-wrapper.jar
+        
+    # 11. Android APK构建
+    - name: Build Android APK with Gradle
       run: |
         cd userdata_rust/android
         ./gradlew assembleRelease
         
+    # 12. APK文件上传
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
