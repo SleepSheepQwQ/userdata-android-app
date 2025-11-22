@@ -41,20 +41,54 @@ jobs:
       with:
         targets: aarch64-linux-android
         
-    - name: Setup Rust for Android
+    # 最保险的方式：直接设置完整路径
+    - name: Setup Rust for Android (Complete)
       run: |
-        cd userdata_rust
         NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
         TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
         
+        # 设置所有必要的环境变量
         echo "CC_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> $GITHUB_ENV
         echo "CXX_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang++" >> $GITHUB_ENV
         echo "AR_aarch64_linux_android=$TOOLCHAIN_PATH/llvm-ar" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$TOOLCHAIN_PATH/llvm-ar" >> $GITHUB_ENV
         
-    - name: Build Rust library
+        # 验证工具链存在
+        ls -la $TOOLCHAIN_PATH/aarch64-linux-android21-clang
+        ls -la $TOOLCHAIN_PATH/llvm-ar
+        
+    - name: Create .cargo directory and config
+      run: |
+        mkdir -p userdata_rust/.cargo
+        
+        # 创建最保险的配置文件
+        cat > userdata_rust/.cargo/config.toml << 'EOF'
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android21-clang"
+ar = "llvm-ar"
+
+[target.armv7-linux-androideabi]
+linker = "armv7a-linux-androideabi21-clang"
+ar = "llvm-ar"
+
+[target.x86_64-linux-android]
+linker = "x86_64-linux-android21-clang"
+ar = "llvm-ar"
+
+[target.i686-linux-android]
+linker = "i686-linux-android21-clang"
+ar = "llvm-ar"
+EOF
+        
+        # 验证配置文件
+        cat userdata_rust/.cargo/config.toml
+        
+    - name: Build Rust library with verbose output
       run: |
         cd userdata_rust
-        cargo build --release --target aarch64-linux-android
+        # 使用详细输出来调试
+        cargo build --release --target aarch64-linux-android --verbose
         
     - name: Build Android APK with Gradle
       run: |
