@@ -41,36 +41,41 @@ jobs:
       with:
         targets: aarch64-linux-android
         
-    - name: Setup Android toolchain with full paths
-      run: |
-        NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
-        TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        
-        # 创建符号链接到系统路径
-        sudo ln -sf "$TOOLCHAIN_PATH/aarch64-linux-android21-clang" /usr/local/bin/aarch64-linux-android21-clang
-        sudo ln -sf "$TOOLCHAIN_PATH/aarch64-linux-android21-clang++" /usr/local/bin/aarch64-linux-android21-clang++
-        sudo ln -sf "$TOOLCHAIN_PATH/llvm-ar" /usr/local/bin/llvm-ar
-        
-        # 设置环境变量
-        echo "CC_aarch64_linux_android=/usr/local/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
-        echo "CXX_aarch64_linux_android=/usr/local/bin/aarch64-linux-android21-clang++" >> $GITHUB_ENV
-        echo "AR_aarch64_linux_android=/usr/local/bin/llvm-ar" >> $GITHUB_ENV
-        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=/usr/local/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
-        
     - name: Create .cargo directory
       run: mkdir -p userdata_rust/.cargo
       
     - name: Create cargo config with full paths
       run: |
+        NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
+        TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        
         echo '[target.aarch64-linux-android]' > userdata_rust/.cargo/config.toml
-        echo 'linker = "/usr/local/bin/aarch64-linux-android21-clang"' >> userdata_rust/.cargo/config.toml
-        echo 'ar = "/usr/local/bin/llvm-ar"' >> userdata_rust/.cargo/config.toml
+        echo "linker = \"$TOOLCHAIN_PATH/aarch64-linux-android21-clang\"" >> userdata_rust/.cargo/config.toml
+        echo "ar = \"$TOOLCHAIN_PATH/llvm-ar\"" >> userdata_rust/.cargo/config.toml
+        
+    - name: Setup Rust environment with full paths
+      run: |
+        NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
+        TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        
+        echo "CC_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> $GITHUB_ENV
+        echo "CXX_aarch64_linux_android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang++" >> $GITHUB_ENV
+        echo "AR_aarch64_linux_android=$TOOLCHAIN_PATH/llvm-ar" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$TOOLCHAIN_PATH/llvm-ar" >> $GITHUB_ENV
+        echo "$TOOLCHAIN_PATH" >> $GITHUB_PATH
         
     - name: Verify toolchain
       run: |
-        which aarch64-linux-android21-clang
-        which llvm-ar
-        /usr/local/bin/aarch64-linux-android21-clang --version
+        NDK_PATH="$ANDROID_HOME/ndk/25.1.8937393"
+        TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        
+        echo "Checking toolchain files:"
+        ls -la "$TOOLCHAIN_PATH/aarch64-linux-android21-clang"
+        ls -la "$TOOLCHAIN_PATH/llvm-ar"
+        
+        echo "Testing direct execution:"
+        "$TOOLCHAIN_PATH/aarch64-linux-android21-clang" --version
         
     - name: Build Rust library
       run: |
